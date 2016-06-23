@@ -1,0 +1,205 @@
+#!/usr/bin/env python
+
+import cStringIO
+import codecs
+import csv
+import requests
+import sys
+
+key = 'QUPOJZAQ4QFQS275VY'
+client_secret = 'LXAUORIFLILGR7TPDHALJAJ762VF6G4YBEWCEHMIPUVGYBG4QP'
+personal_oauth_token = 'D757MHTWJSMQGZBMJGZF'
+anon_oauth_token = 'CUJGELAMCZDAVMJOQEXR'
+
+def get_page(page):
+    return requests.get(
+        'https://www.eventbriteapi.com/v3/events/25365944222/attendees/'
+        '?status=attending&page={}'.format(page),
+        headers = {
+            'Authorization': 'Bearer {}'.format(personal_oauth_token),
+        },
+        verify = True,
+    )
+
+
+def parse_answers(answers):
+    organize, participate, other = '', '', ''
+
+    for record in answers:
+        if 'answer' not in record:
+            continue
+
+        if record['question_id'] == '12464337':
+            organize = record['answer']
+        elif record['question_id'] == '12464515':
+            participate = record['answer']
+        elif record['question_id'] == '12464338':
+            other = record['answer']
+
+    return organize, participate, other
+
+class UnicodeWriter:
+    """
+    A CSV writer which will write rows to CSV file "f",
+    which is encoded in the given encoding.
+    """
+
+    def __init__(self, f, dialect=csv.excel, encoding="utf-8", **kwds):
+        # Redirect output to a queue
+        self.queue = cStringIO.StringIO()
+        self.writer = csv.writer(self.queue, dialect=dialect, **kwds)
+        self.stream = f
+        self.encoder = codecs.getincrementalencoder(encoding)()
+
+    def writerow(self, row):
+        self.writer.writerow([s.encode("utf-8") for s in row])
+        # Fetch UTF-8 output from the queue ...
+        data = self.queue.getvalue()
+        data = data.decode("utf-8")
+        # ... and reencode it into the target encoding
+        data = self.encoder.encode(data)
+        # write to the target stream
+        self.stream.write(data)
+        # empty queue
+        self.queue.truncate(0)
+
+    def writerows(self, rows):
+        for row in rows:
+            self.writerow(row)
+
+
+response = get_page(1)
+raw_attendees = response.json()['attendees']
+
+page_count = response.json()['pagination']['page_count']
+for page in xrange(2, page_count + 1):
+    response = get_page(page)
+    raw_attendees.extend(response.json()['attendees'])
+
+attendees = {}
+for att in raw_attendees:
+    if 'email' not in att['profile']:
+        continue
+    email = att['profile']['email']
+    id = att['id']
+    name = att['profile']['name']
+    organize, participate, other = parse_answers(att['answers'])
+
+    attendees[id] = {
+        'name': name,
+        'email': email,
+        'organize': organize,
+        'participate': participate,
+        'other': other,
+    }
+
+f = open('attendees.csv', 'w')
+writer = UnicodeWriter(f)
+for id, att in sorted(attendees.items()):
+    org_hs, org_cp, org_cb, org_part = [], [], [], []
+    evt_hs, evt_cb, evt_part = [], [], []
+
+    for org in att['organize'].split(' | '):
+        if org == (u"J'aimerai aider avec LNT (Ne Laisser aucune Trace) / "
+                   "I'd like to help with LNT (Leave No Trace)"):
+            evt_cb.append('LNT')
+        elif org == u"Oui, Traduction / Yes, Translation":
+            org_cp.append('Translation')
+        elif org == (u"Oui, Aider \xe0 organiser les efforts du Sant\xe9 et "
+                     u"S\xe9curit\xe9 avant l'\xe9v\xe9nement / Yes, Help "
+                     u"organize Health and Safety efforts before the event"):
+            org_hs.append('Organize H&S')
+        elif org == (u"Oui, Aider \xe0 organiser les logistiques (porte, "
+                     u"stationnement, LNT, etc.) avant l'\xe9v\xe9nement / "
+                     u"Yes, Help organize logistics (gate, parking, LNT, etc.)"
+                     u" before the event"):
+            org_cb.append('Organize Logistics')
+        elif org == (u"Oui, Comit\xe9 des bourses d'art / Yes, Art grants "
+                     u"committee"):
+            org_part.append('Art Grant Committee')
+        elif org == (u"Oui, Placement d'art et camps th\xe9matiques / Yes, "
+                     u"Art and theme camp placement"):
+            org_part.append('Placement')
+        elif org == (u"Oui, Promotion et design graphique / Yes, Promotion "
+                     u"and Graphic design"):
+            org_cp.append('Promotion & Graphic Design')
+        elif org == (u"Oui, Signalisation et information / Yes, Signage and "
+                     u"information"):
+            org_cb.append('Signage & Information')
+        elif org == "Oui, autrement / Yes, some other way":
+            continue
+        elif org == "Non / No":
+            continue
+        elif org == "":
+            continue
+        else:
+            print org.encode('ascii', errors='backslashreplace')
+            raise
+
+    for evt in att['participate'].split(' | '):
+        if evt == (u"J'aimerai aider avec la s\xe9curit\xe9 d'incendie / "
+                   u"I'd like to help with fire safety"):
+            evt_hs.append('Fire Safety')
+        elif evt == (u"J'aimerai aider avec le sanctuaire (urgence "
+                     u"non-m\xe9dicale) / I'd like to help with sanctuary "
+                     u"(non-medical emergency)"):
+            evt_hs.append('Sanctuary')
+        elif evt == (u"J'aimerai aider avec les greeters / I'd like to "
+                     u"help with greeters"):
+            evt_cb.append('Greeter')
+        elif evt == (u"J'aimerai aider avec les transports / I'd like to "
+                     u"help with transportation"):
+            evt_cb.append('Transportation')
+        elif evt == (u"J'aimerai aider avec LNT (Ne Laisser aucune Trace) "
+                     u"/ I'd like to help with LNT (Leave No Trace)"):
+            evt_cb.append('LNT')
+        elif evt == (u"J'aimerai aider en tant que Ranger / I'd like to "
+                     u"help as a Ranger"):
+            evt_hs.append('Ranger')
+        elif evt == (u"J'aimerai aider \xe0 la porte / I'd like to help "
+                     u"at the gate"):
+            evt_cb.append('Gate')
+        elif evt == (u"J'apporte une installation artistique / I'm bringing "
+                     u"an art installation"):
+            evt_part.append('Art Installation')
+        elif evt == (u"Je performe / I'm performing"):
+            evt_part.append('Performing')
+        elif evt == (u"Je suis membre (o\xf9 organisateur!) d'un camp "
+                     u"th\xe9matique / I'm a theme camp member (or "
+                     u"organizer!)"):
+            evt_part.append('Theme Camp')
+        elif evt == u"J'organize un atelier / I'm organizing a workshop":
+            evt_part.append('Workshop')
+        elif evt == (u"J'aimerai aider avec la pr\xe9paration du site "
+                     u"(DPW) / I'd like to help prepare the site (DPW)"):
+            evt_cb.append('DPW')
+        elif evt == (u"J'aimerai offrir les Premiers Soins o\xf9 aide "
+                     u"medicale / I'd like to help with First Aid or medical"):
+            evt_hs.append('Medical')
+        elif evt == (u"Autre / Other"):
+            continue
+        elif evt == "":
+            continue
+        else:
+            print evt.encode('ascii', errors='backslashreplace')
+            raise
+
+    writer.writerow([
+        att['name'],
+        att['email'],
+        u', '.join(org_hs),
+        u', '.join(org_cp),
+        u', '.join(org_cb),
+        u', '.join(org_part),
+        att['other'],
+        u', '.join(evt_hs),
+        u', '.join(evt_cb),
+        u', '.join(evt_part),
+    ])
+
+# Grab all attendees
+# MVP: DUMP TO CSV
+
+# Sort by ID
+# Batch new attendees
+# Send email!
